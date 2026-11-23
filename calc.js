@@ -6,7 +6,7 @@
     dailyHours:8, weeklyPaidHours:8, overtimeRate:1.5, holidayRate:1.5,
     holidayExtraRate:2, nightRate:.5, pensionRate:.0475,
     healthRate:.03595, careRate:.1314, employmentRate:.009,
-    excludedInsurance:0, excludedTax:0, taxMode:'table', manualTax:0,
+    excludedInsurance:0, pensionBasis:0, healthBasis:0, excludedTax:0, taxMode:'table', manualTax:0,
     taxPercent:100, weeklyMode:'manual', weeklyDays:0,
     baseAdjust:0, overtimeAdjust:0, holidayAdjust:0,
     holidayExtraAdjust:0, nightAdjust:0, paidAdjust:0,
@@ -82,8 +82,10 @@
     };
     const gross=Object.values(earnings).reduce((a,b)=>a+b,0);
     const socialBase=Math.max(0,gross-n(s.excludedInsurance));
-    const pension=floor10(floor1000(socialBase)*n(s.pensionRate));
-    const health=floor10(socialBase*n(s.healthRate));
+    const pensionBase=n(s.pensionBasis)>0?n(s.pensionBasis):socialBase;
+    const healthBase=n(s.healthBasis)>0?n(s.healthBasis):socialBase;
+    const pension=floor10(floor1000(pensionBase)*n(s.pensionRate));
+    const health=floor10(healthBase*n(s.healthRate));
     const care=floor10(health*n(s.careRate));
     const employment=floor10(socialBase*n(s.employmentRate));
     const taxable=Math.max(0,gross-n(s.excludedTax));
@@ -96,6 +98,7 @@
     const deductions=insurance+(incomeTax||0)+(localTax||0)+additionalDeduction;
     return {s,h,weeklyDays,weeklyHours,earnings,gross,taxable,taxKnown,insurance,deductions,
       net:gross-deductions,
+      insuranceBases:{pension:pensionBase,health:healthBase,employment:socialBase},
       components:{pension,health,care,employment,incomeTax,localTax,additionalDeduction}};
   }
   global.PayCalc={DEFAULT,tableTax,extractTotals,autoWeeklyDays,payroll};

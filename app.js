@@ -5,13 +5,15 @@
   const now=new Date();let ym=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   let state={version:1,records:{},defaults:{...C.DEFAULT},monthSettings:{}};
   try {const data=JSON.parse(localStorage.getItem(storageKey)||'null');if(data&&data.version===1){state={version:1,records:data.records||{},defaults:{...C.DEFAULT,...(data.defaults||{})},monthSettings:data.monthSettings||{}};}}catch(e){console.warn('저장된 기록을 읽지 못했습니다.',e);}
-  let activeTab='calendar',selectedDate=null,temporaryRecord=null,toastTimer;
+  let activeTab='calendar',selectedDate=null,temporaryRecord=null,toastTimer,saveButtonTimer,closeSheetTimer,countFrame=0,lastRenderedNet=null;
   const fmt=v=>Math.round(Number(v)||0).toLocaleString('ko-KR');
   const won=v=>`${fmt(v)}원`;
   const pad=n=>String(n).padStart(2,'0');
   const dateKey=(y,m,d)=>`${y}-${pad(m)}-${pad(d)}`;
   const labelDate=(date)=>{const [y,m,d]=date.split('-').map(Number);return `${y}년 ${m}월 ${d}일 (${['일','월','화','수','목','금','토'][new Date(y,m-1,d).getDay()]})`;};
-  function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));}catch(e){toast('기기 저장 공간이 부족합니다. 백업 파일을 저장하세요.');}}
+  function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));return true;}catch(e){toast('저장하지 못했어요. 기기 저장 공간을 확인하고 백업을 만드세요.');return false;}}
+  function flashSaved(){const btn=$('#globalSave');if(!btn)return;btn.classList.remove('saved');void btn.offsetWidth;btn.classList.add('saved');$('#saveButtonLabel').textContent='저장됨';clearTimeout(saveButtonTimer);saveButtonTimer=setTimeout(()=>{$('#saveButtonLabel').textContent='저장';btn.classList.remove('saved');},1900);}
+  function saveAll(){const ok=commitSettingInputs();if(ok===false)return; if(save()){flashSaved();toast('이 기기에 기록과 설정을 저장했어요.');}}
   function toast(msg){const node=$('#toast');node.textContent=msg;node.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>node.classList.remove('show'),2800);}
   function settings(){return {...C.DEFAULT,...state.defaults,...(state.monthSettings[ym]||{})};}
   function setSetting(key,value){const merged=settings();merged[key]=value;state.monthSettings[ym]=merged;save();renderSummary();renderSettingsHints();}
@@ -21,7 +23,7 @@
     pay:[defNum('hourly','시급 (원)',10),defNum('allowance','고정수당 (원)',1000),defNum('transport','교통비 (원)',1000),defNum('extraAllowance','기타 추가수당 (원)',1000)],
     rates:[defNum('overtimeRate','잔업 배율 (1.5 = 150%)',.1),defNum('holidayRate','특근 8시간 이내 배율',.1),defNum('holidayExtraRate','특근 8시간 초과 배율',.1),defNum('nightRate','야간 추가 가산 배율',.1)],
     weekly:[defNum('weeklyDays','주휴 인정 횟수 (회)',.5),defNum('weeklyPaidHours','주휴 1회당 시간',.5)],
-    insurance:[defNum('pensionRate','국민연금 본인 부담률',.00005),defNum('healthRate','건강보험 본인 부담률',.00005),defNum('careRate','장기요양 / 건강보험료',.0001),defNum('employmentRate','고용보험 본인 부담률',.0001),defNum('excludedInsurance','보험 산정 제외 금액 (원)',1000),defNum('excludedTax','소득세 비과세 금액 (원)',1000),defNum('extraDeduction','기타 공제액 (원)',1000)],
+    insurance:[defNum('pensionBasis','국민연금 신고 기준소득월액 (0 = 자동)',1000),defNum('healthBasis','건강보험 신고 보수월액 (0 = 자동)',1000),defNum('excludedInsurance','보험 산정 제외금액 (0 = 없음)',1000),defNum('excludedTax','소득세 비과세 금액 (0 = 없음)',1000),defNum('extraDeduction','기타 공제액 (0 = 없음)',1000)],
     tax:[defNum('manualTax','근로소득세 직접 입력 (원)',10),defNum('taxPercent','원천징수 적용 비율 (%)',10)],
     adjustments:[defNum('baseAdjust','기본근로시간 보정 (+/-시간)',.5,'',-999),defNum('paidAdjust','유급시간 보정 (+/-시간)',.5,'',-999),defNum('overtimeAdjust','연장시간 보정 (+/-시간)',.5,'',-999),defNum('holidayAdjust','휴일근로시간 보정 (+/-시간)',.5,'',-999),defNum('holidayExtraAdjust','휴일 8시간 초과 보정 (+/-시간)',.5,'',-999),defNum('nightAdjust','야간시간 보정 (+/-시간)',.5,'',-999)]
   };
@@ -41,7 +43,7 @@
     renderSettingsHints();
   }
   function renderSettingsHints(){
-    const s=settings();$('#settingMonthText').textContent=`${ym.replace('-','년 ')}월에만 적용 · 저장 즉시 계산`;
+    const s=settings();$('#settingMonthText').textContent=`${ym.replace('-','년 ')}월에 적용 · 기기에 자동 저장`; 
     const wi=$('#weeklyFields').querySelector('[name="weeklyDays"]');wi.disabled=s.weeklyMode==='auto';wi.closest('.field').classList.toggle('disabled',s.weeklyMode==='auto');
     const ti=$('#taxFields').querySelector('[name="manualTax"]');ti.disabled=s.taxMode!=='manual';ti.closest('.field').classList.toggle('disabled',s.taxMode!=='manual');
   }
@@ -76,12 +78,12 @@
       if(caption){const chip=document.createElement('small');chip.className='day-chip '+caption[1];chip.textContent=caption[0];cell.appendChild(chip);}
       else{const plus=document.createElement('span');plus.className='day-add';plus.textContent='+';cell.appendChild(plus);}
       cell.setAttribute('aria-label',`${labelDate(key)} ${caption?caption[0]:'기록 없음'}`);
-      cell.addEventListener('click',()=>openSheet(key));node.appendChild(cell);
+      cell.style.setProperty('--cell-delay',`${Math.min(d*12,280)}ms`);cell.addEventListener('click',()=>openSheet(key));node.appendChild(cell);
     }
     const extra=(7-(start+last)%7)%7;
     for(let i=0;i<extra;i++){const p=document.createElement('div');p.className='calendar-blank';node.appendChild(p);}
   }
-  function openSheet(date){selectedDate=date;temporaryRecord={...(state.records[date]||dayPreset('work8'))};$('#sheetTitle').textContent=labelDate(date);refreshSheet();$('#daySheet').hidden=false;$('#sheetBackdrop').hidden=false;document.body.classList.add('sheet-open');}
+  function openSheet(date){clearTimeout(closeSheetTimer);const sheet=$('#daySheet'),backdrop=$('#sheetBackdrop');sheet.classList.remove('closing');backdrop.classList.remove('closing');selectedDate=date;temporaryRecord={...(state.records[date]||dayPreset('work8'))};$('#sheetTitle').textContent=labelDate(date);refreshSheet();sheet.hidden=false;backdrop.hidden=false;document.body.classList.add('sheet-open');}
   function refreshSheet(){
     $('#recordType').value=temporaryRecord.type||'custom';
     $('#recordNote').value=temporaryRecord.note||'';
@@ -91,14 +93,18 @@
       const p=dayPreset(btn.dataset.preset);btn.classList.toggle('selected',Object.keys(p).every(k=>k==='note'||selected[k]===p[k]));
     });
   }
-  function closeSheet(){selectedDate=null;temporaryRecord=null;$('#daySheet').hidden=true;$('#sheetBackdrop').hidden=true;document.body.classList.remove('sheet-open');}
+  function closeSheet(){selectedDate=null;temporaryRecord=null;const sheet=$('#daySheet'),backdrop=$('#sheetBackdrop');sheet.classList.add('closing');backdrop.classList.add('closing');document.body.classList.remove('sheet-open');clearTimeout(closeSheetTimer);closeSheetTimer=setTimeout(()=>{sheet.hidden=true;backdrop.hidden=true;sheet.classList.remove('closing');backdrop.classList.remove('closing');},190);}
   function renderSummary(){
     const result=C.payroll(state.records,ym,settings());
     $('#monthTitle').textContent=ym.replace(/^([0-9]{4})-([0-9]{2})$/,(a,y,m)=>`${y}년 ${Number(m)}월`);
     $('#monthPicker').value=ym;
-    $('#netTotal').innerHTML=`${fmt(result.net)}<small>원</small>`;
+    animateNet(result.net);
     $('#grossTotal').textContent=won(result.gross);$('#deductTotal').textContent=won(result.deductions);
     $('#workedDays').textContent=`${result.h.days+result.h.holidayDays}일`;
+    $('#insuranceSum').textContent=won(result.insurance);
+    for(const [id,key] of [['pensionPreview','pension'],['healthPreview','health'],['carePreview','care'],['employmentPreview','employment']])$('#'+id).textContent=won(result.components[key]);
+    $('#insuranceNote').textContent=(Number(ym.slice(0,4))!==2026?'선택한 연도의 보험료율은 아직 검증되지 않았어요. 현재 2026년 기본 요율로 계산한 참고 금액입니다. ':'')+'현재 월 지급액 기준 예상액입니다. 회사에 신고된 보험 기준금액이 다르면 실제 공제액과 차이가 날 수 있어요. 산재보험은 회사가 부담합니다.';
+    $('.insurance-pill').lastChild.textContent=(Number(ym.slice(0,4))===2026?' 2026년 보험료 자동 계산':' 2026년 요율로 참고 계산');
     $('#taxBadge').textContent=!result.taxKnown?'소득세 미확정':result.s.taxMode==='manual'?'수동 세액 반영':'2026 세액 반영';
     $('#taxBadge').classList.toggle('unknown',!result.taxKnown);
     $('#estimateNotice').textContent=result.taxKnown?'지금까지 입력한 기록으로 계산한 금액입니다.':'소득세가 빠지지 않은 잠정 금액입니다. 설정에서 소득세를 직접 입력하세요.';
@@ -112,6 +118,8 @@
     const summary=[['기본근무',result.h.base+'h'],['잔업 / 연장',result.h.overtime+'h'],['휴일특근',(result.h.holiday+result.h.holidayExtra)+'h'],['유급일',result.h.paid+'h'],['주휴 인정',result.weeklyDays+'회'],['야간 추가',result.h.night+'h']];
     $('#hourSummary').replaceChildren(...summary.map(([label,val])=>{const d=document.createElement('div');d.className='houritem';const t=document.createElement('span');t.textContent=label;const b=document.createElement('strong');b.textContent=val;d.append(t,b);return d;}));
   }
+  function animateNet(next){const target=$('#netTotal'),motion=window.matchMedia('(prefers-reduced-motion: reduce)').matches;cancelAnimationFrame(countFrame);const start=lastRenderedNet===null?next:lastRenderedNet;lastRenderedNet=next;if(start===next||motion){target.innerHTML=`${fmt(next)}<small>원</small>`;return;}const began=performance.now(),duration=430;const loop=(t)=>{const p=Math.min((t-began)/duration,1),ease=1-Math.pow(1-p,3),value=Math.round(start+(next-start)*ease);target.innerHTML=`${fmt(value)}<small>원</small>`;if(p<1)countFrame=requestAnimationFrame(loop);};countFrame=requestAnimationFrame(loop);}
+  function commitSettingInputs(){const current=settings();for(const el of $$('.setting-field')){if(el.disabled)continue;const value=Number(el.value);if(!Number.isFinite(value)||el.value.trim()===''){toast('설정의 숫자를 확인해 주세요.');return false;}current[el.name]=value;}current.weeklyMode=$('#weeklyMode').value;current.taxMode=$('#taxMode').value;state.monthSettings[ym]=current;renderSummary();return true;}
   function fillLines(node,lines){node.replaceChildren(...lines.map(([label,amount,explain])=>{
     const d=document.createElement('div');d.className='statement-line';const left=document.createElement('div');const t=document.createElement('span');t.textContent=label;left.appendChild(t);if(explain){const sm=document.createElement('small');sm.textContent=explain;left.appendChild(sm);}
     const a=document.createElement('strong');a.textContent=amount===null?'미확정':won(amount);d.append(left,a);return d;}));}
@@ -119,6 +127,7 @@
   function showTab(tab){activeTab=tab;$$('.tabs button').forEach(el=>el.classList.toggle('active',el.dataset.tab===tab));for(const key of ['calendar','statement','settings'])$('#'+key+'Panel').hidden=key!==tab;window.scrollTo({top:0,behavior:'instant'});}
   $$('.tabs button').forEach(el=>el.addEventListener('click',()=>showTab(el.dataset.tab)));
   $('#settingsShortcut').addEventListener('click',()=>showTab('settings'));
+  $('#globalSave').addEventListener('click',saveAll);
   $('#prevMonth').addEventListener('click',()=>changeMonth(-1));$('#nextMonth').addEventListener('click',()=>changeMonth(1));
   $('#todayBtn').addEventListener('click',()=>{ym=`${now.getFullYear()}-${pad(now.getMonth()+1)}`;renderAll();});
   $('#monthPickerBtn').addEventListener('click',()=>{const input=$('#monthPicker');if(input.showPicker)input.showPicker();else input.click();});
@@ -134,7 +143,7 @@
     if(!['work','holiday','paid','off','absent','custom'].includes(temporaryRecord.type))return toast('근무 분류를 확인해 주세요.');
     for(const k of ['base','overtime','holiday','holidayExtra','night','paid']){const x=Number(temporaryRecord[k]);if(!Number.isFinite(x)||x<0||x>24)return toast('시간은 0~24시간으로 입력해 주세요.');}
     if(['off','absent'].includes(temporaryRecord.type))temporaryRecord=dayPreset(temporaryRecord.type);
-    state.records[selectedDate]={...temporaryRecord};save();closeSheet();renderCalendar();renderSummary();toast('근무 기록을 저장했어요.');});
+    state.records[selectedDate]={...temporaryRecord};if(save()){flashSaved();closeSheet();renderCalendar();renderSummary();toast('근무 기록을 저장했어요.');}});
   $('#deleteDay').addEventListener('click',()=>{if(!selectedDate)return;delete state.records[selectedDate];save();closeSheet();renderCalendar();renderSummary();toast('해당 날짜 기록을 삭제했어요.');});
   for(const id of ['payFields','rateFields','weeklyFields','insuranceFields','taxFields','adjustFields']){
     $('#'+id).addEventListener('change',e=>{
@@ -146,7 +155,7 @@
   }
   $('#weeklyMode').addEventListener('change',e=>setSetting('weeklyMode',e.target.value));
   $('#taxMode').addEventListener('change',e=>setSetting('taxMode',e.target.value));
-  $('#saveDefaults').addEventListener('click',()=>{state.defaults={...settings()};save();toast('현재 설정을 향후 월의 기본값으로 저장했어요.');});
+  $('#saveDefaults').addEventListener('click',()=>{if(!commitSettingInputs())return;state.defaults={...settings()};if(save()){flashSaved();toast('현재 설정을 향후 월의 기본값으로 저장했어요.');}});
   $('#resetMonth').addEventListener('click',()=>{if(!confirm(`${ym} 급여 설정을 기본값으로 되돌릴까요? 날짜별 근무 기록은 유지됩니다.`))return;delete state.monthSettings[ym];save();renderAll();toast('이달 급여 설정이 초기화됐어요.');});
   $('#exportBtn').addEventListener('click',()=>{
     const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);

@@ -40,12 +40,11 @@
     });
     return sums;
   }
-  function autoWeeklyDays(records,ym){
-    // 참고 추정: 월~금 기록이 모두 존재하고 결근이 없으며 소정근로가 주 15시간 이상일 때.
-    // 교대제, 월 경계, 휴일 및 실제 개근 규칙은 회사마다 다르므로 수동 설정 우선.
+  // 일요일을 기준으로 월~금 개근을 확인한 자동 추정 대상 주 목록.
+  function autoWeeklySundays(records,ym){
     const [year,month]=ym.split('-').map(Number);
     const last=new Date(year,month,0).getDate();
-    let count=0;
+    const eligible=[];
     for(let day=1;day<=last;day++){
       const d=new Date(year,month-1,day);if(d.getDay()!==0)continue;
       const mon=new Date(year,month-1,day-6);
@@ -57,9 +56,37 @@
         if(!r||r.type==='absent'){complete=false;break;}
         scheduled+=Math.max(0,n(r.base)+n(r.paid));
       }
-      if(complete&&scheduled>=15)count++;
+      if(complete&&scheduled>=15)eligible.push(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`);
     }
-    return count;
+    return eligible;
+  }
+  function autoWeeklyDays(records,ym){return autoWeeklySundays(records,ym).length;}
+  // 달력 표시 배분: 월 주휴수당 총액과 표시된 일요일 금액 합계를 일치시킵니다.
+  // 수동 횟수는 개근 추정 주에 우선 배분하고 나머지 주에 차례로 배분합니다.
+  // 실제 인정된 주를 확정하는 기능은 아니며, 수동 월별 인정 횟수가 급여 계산의 기준입니다.
+  function weeklySundayAmounts(records,ym,input){
+    const s={...DEFAULT,...(input||{})};
+    const [year,month]=ym.split('-').map(Number),last=new Date(year,month,0).getDate();
+    const all=[];
+    for(let d=1;d<=last;d++)if(new Date(year,month-1,d).getDay()===0)
+      all.push(`${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+    if(!all.length)return {};
+    const eligible=autoWeeklySundays(records,ym);
+    const order=s.weeklyMode==='auto'?eligible:[...eligible,...all.filter(k=>!eligible.includes(k))];
+    let remaining=s.weeklyMode==='auto'?eligible.length:Math.max(0,n(s.weeklyDays));
+    const rate=Math.max(0,n(s.hourly))*Math.max(0,n(s.weeklyPaidHours));
+    const amounts={};
+    for(let i=0;i<order.length&&remaining>0;i++){
+      // 월 경계를 걸친 주 등으로 인정 횟수가 일요일 개수를 넘으면 마지막 일요일에 합산합니다.
+      const share=i===order.length-1?remaining:Math.min(1,remaining);
+      amounts[order[i]]=roundWon(share*rate);
+      remaining-=share;
+    }
+    // 항목별 소수 시간 반올림과 총액 간 최대 1원 오차를 마지막 주에서 보정합니다.
+    const total=roundWon((s.weeklyMode==='auto'?eligible.length:Math.max(0,n(s.weeklyDays)))*rate);
+    const diff=total-Object.values(amounts).reduce((a,b)=>a+b,0);
+    if(diff&&order.length){const key=order[Math.min(order.length-1,Object.keys(amounts).length-1)];amounts[key]=(amounts[key]||0)+diff;}
+    return amounts;
   }
   function payroll(records,ym,input){
     const s={...DEFAULT,...(input||{})};
@@ -101,5 +128,5 @@
       insuranceBases:{pension:pensionBase,health:healthBase,employment:socialBase},
       components:{pension,health,care,employment,incomeTax,localTax,additionalDeduction}};
   }
-  global.PayCalc={DEFAULT,tableTax,extractTotals,autoWeeklyDays,payroll};
+  global.PayCalc={DEFAULT,tableTax,extractTotals,autoWeeklyDays,autoWeeklySundays,weeklySundayAmounts,payroll};
 })(typeof window!=='undefined'?window:globalThis);
